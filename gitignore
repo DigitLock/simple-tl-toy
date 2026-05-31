@@ -1,0 +1,17 @@
+# Arduino IDE
+*.elf
+*.hex
+*.bin
+*.map
+build/
+.build/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+*.swp
+*.swo
+*~
