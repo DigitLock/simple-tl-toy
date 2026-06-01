@@ -11,8 +11,10 @@
 TrafficLight trafficLights[NUM_TRAFFIC_LIGHTS];
 
 void setup() {
+  // Staggered start: TL i waits i * START_OFFSET_MS before its RED timer
+  // begins, so adjacent lights fall a fixed phase-shift out of step.
   for (uint8_t i = 0; i < NUM_TRAFFIC_LIGHTS; ++i) {
-    trafficLights[i].begin(TRAFFIC_LIGHT_CONFIGS[i]);
+    trafficLights[i].begin(TRAFFIC_LIGHT_CONFIGS[i], i * START_OFFSET_MS);
   }
 }
 

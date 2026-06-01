@@ -25,6 +25,19 @@ constexpr unsigned long RED_YELLOW_DURATION_MS     = 1500;  // red+yellow "get r
 constexpr unsigned long EMERGENCY_BLINK_INTERVAL_MS = 500;  // half-period of yellow blink
 constexpr unsigned long DEBOUNCE_DELAY_MS          = 50;    // button debounce window
 
+// Pre-yellow green blink: a short blinking-green phase between solid GREEN
+// and YELLOW that warns the user the light is about to change.
+// Sequence inside the phase: off → on → off → on → off → on → off → YELLOW,
+// so total phase duration = COUNT * (ON + OFF) = 3 * 600 = 1800 ms.
+constexpr unsigned long GREEN_BLINK_ON_MS          = 300;
+constexpr unsigned long GREEN_BLINK_OFF_MS         = 300;
+constexpr uint8_t       GREEN_BLINK_COUNT          = 3;     // number of on-periods
+
+// Staggered startup: traffic light at index i waits (i * START_OFFSET_MS)
+// before its RED-phase timer starts. Red LED is shown during the wait so
+// the light is never dark.
+constexpr unsigned long START_OFFSET_MS            = 1000;
+
 // Per-light configuration: pins + individual red/green durations.
 struct TrafficLightConfig {
   uint8_t       pinRed;

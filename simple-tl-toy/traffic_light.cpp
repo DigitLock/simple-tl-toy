@@ -9,9 +9,14 @@ TrafficLight::TrafficLight()
       lastBlinkAt_(0),
       lastButtonReading_(HIGH),
       stableButtonState_(HIGH),
-      lastDebounceAt_(0) {}
+      lastDebounceAt_(0),
+      waitingToStart_(false),
+      startAt_(0),
+      greenBlinkOn_(false),
+      greenBlinkOnsDone_(0),
+      greenBlinkLastToggleAt_(0) {}
 
-void TrafficLight::begin(const TrafficLightConfig& cfg) {
+void TrafficLight::begin(const TrafficLightConfig& cfg, unsigned long startDelayMs) {
   cfg_ = cfg;
 
   pinMode(cfg_.pinRed,    OUTPUT);
@@ -19,19 +24,36 @@ void TrafficLight::begin(const TrafficLightConfig& cfg) {
   pinMode(cfg_.pinGreen,  OUTPUT);
   pinMode(cfg_.pinButton, INPUT_PULLUP);
 
-  // Start immediately in normal mode at RED, per spec §2.2.
-  enterNormalMode(millis());
+  unsigned long now = millis();
+  if (startDelayMs > 0) {
+    // Show solid RED for startDelayMs, then begin the normal cycle.
+    waitingToStart_ = true;
+    startAt_        = now + startDelayMs;
+    setLights(true, false, false);
+  } else {
+    enterNormalMode(now);
+  }
 }
 
 void TrafficLight::update(unsigned long now) {
-  // Button always polled first: a press toggles mode regardless of phase.
+  // Button is polled in every state, including during the staggered-start
+  // wait — a press there cancels the wait and enters emergency mode.
   if (pollButtonPressed(now)) {
+    waitingToStart_ = false;
     if (mode_ == MODE_NORMAL) {
       enterEmergencyMode(now);
     } else {
       enterNormalMode(now);
     }
-    return;  // mode just changed; nothing else to do this tick
+    return;
+  }
+
+  if (waitingToStart_) {
+    if (now >= startAt_) {
+      waitingToStart_ = false;
+      enterNormalMode(now);
+    }
+    return;
   }
 
   if (mode_ == MODE_NORMAL) {
@@ -55,6 +77,14 @@ void TrafficLight::enterPhase(Phase p, unsigned long now) {
     case PHASE_RED:        setLights(true,  false, false); break;
     case PHASE_RED_YELLOW: setLights(true,  true,  false); break;
     case PHASE_GREEN:      setLights(false, false, true);  break;
+    case PHASE_GREEN_BLINK:
+      // Enter the blink phase in the "off" half so the user sees a clear
+      // transition out of solid green. Reset blink counters/timer.
+      setLights(false, false, false);
+      greenBlinkOn_           = false;
+      greenBlinkOnsDone_      = 0;
+      greenBlinkLastToggleAt_ = now;
+      break;
     case PHASE_YELLOW:     setLights(false, true,  false); break;
   }
 }
@@ -74,27 +104,34 @@ void TrafficLight::enterEmergencyMode(unsigned long now) {
 
 unsigned long TrafficLight::phaseDuration(Phase p) const {
   switch (p) {
-    case PHASE_RED:        return cfg_.redDurationMs;
-    case PHASE_RED_YELLOW: return RED_YELLOW_DURATION_MS;
-    case PHASE_GREEN:      return cfg_.greenDurationMs;
-    case PHASE_YELLOW:     return YELLOW_DURATION_MS;
+    case PHASE_RED:         return cfg_.redDurationMs;
+    case PHASE_RED_YELLOW:  return RED_YELLOW_DURATION_MS;
+    case PHASE_GREEN:       return cfg_.greenDurationMs;
+    case PHASE_GREEN_BLINK: return 0;  // self-managed in updateGreenBlink
+    case PHASE_YELLOW:      return YELLOW_DURATION_MS;
   }
   return 0;
 }
 
 void TrafficLight::updateNormal(unsigned long now) {
+  // GREEN_BLINK has its own toggle-based timing, not a single phase timer.
+  if (phase_ == PHASE_GREEN_BLINK) {
+    updateGreenBlink(now);
+    return;
+  }
+
   if (now - phaseStartedAt_ < phaseDuration(phase_)) {
     return;  // current phase still active
   }
 
-  // RED → RED_YELLOW → GREEN → YELLOW → RED
+  // RED → RED_YELLOW → GREEN → GREEN_BLINK → YELLOW → RED
   Phase next;
   switch (phase_) {
-    case PHASE_RED:        next = PHASE_RED_YELLOW; break;
-    case PHASE_RED_YELLOW: next = PHASE_GREEN;      break;
-    case PHASE_GREEN:      next = PHASE_YELLOW;     break;
-    case PHASE_YELLOW:     next = PHASE_RED;        break;
-    default:               next = PHASE_RED;        break;
+    case PHASE_RED:        next = PHASE_RED_YELLOW;  break;
+    case PHASE_RED_YELLOW: next = PHASE_GREEN;       break;
+    case PHASE_GREEN:      next = PHASE_GREEN_BLINK; break;
+    case PHASE_YELLOW:     next = PHASE_RED;         break;
+    default:               next = PHASE_RED;         break;
   }
   enterPhase(next, now);
 }
@@ -106,6 +143,30 @@ void TrafficLight::updateEmergency(unsigned long now) {
   blinkOn_     = !blinkOn_;
   lastBlinkAt_ = now;
   setLights(false, blinkOn_, false);
+}
+
+void TrafficLight::updateGreenBlink(unsigned long now) {
+  // Wait the appropriate half-period for the current LED state.
+  unsigned long interval = greenBlinkOn_ ? GREEN_BLINK_ON_MS : GREEN_BLINK_OFF_MS;
+  if (now - greenBlinkLastToggleAt_ < interval) {
+    return;
+  }
+
+  if (greenBlinkOn_) {
+    // An on-period just finished. Count it and exit early if we're done so
+    // we don't bother turning the LED off only to immediately swap to YELLOW.
+    greenBlinkOnsDone_++;
+    if (greenBlinkOnsDone_ >= GREEN_BLINK_COUNT) {
+      enterPhase(PHASE_YELLOW, now);
+      return;
+    }
+    greenBlinkOn_ = false;
+    setLights(false, false, false);
+  } else {
+    greenBlinkOn_ = true;
+    setLights(false, false, true);
+  }
+  greenBlinkLastToggleAt_ = now;
 }
 
 bool TrafficLight::pollButtonPressed(unsigned long now) {
